@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
+	"net/http"
 	"net/url"
 	stdpath "path"
 	"strings"
@@ -191,6 +193,42 @@ func (d *S3) Remove(ctx context.Context, obj model.Obj) error {
 		return d.removeDir(ctx, obj.GetPath())
 	}
 	return d.removeFile(obj.GetPath())
+}
+
+func (d *S3) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	if d.Endpoint == "" {
+		return nil, errs.NotImplement
+	}
+	endpoint := strings.TrimSuffix(d.Endpoint, "/")
+	detailsURL := endpoint + "/_details"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, detailsURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, fmt.Errorf("request failed, status: %s", resp.Status)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	total := utils.Json.Get(body, "data", "total_space").ToInt64()
+	used := utils.Json.Get(body, "data", "used_space").ToInt64()
+	if total == 0 && used == 0 {
+		total = utils.Json.Get(body, "total_space").ToInt64()
+		used = utils.Json.Get(body, "used_space").ToInt64()
+	}
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: total,
+			UsedSpace:  used,
+		},
+	}, nil
 }
 
 func (d *S3) Put(ctx context.Context, dstDir model.Obj, s model.FileStreamer, up driver.UpdateProgress) error {
