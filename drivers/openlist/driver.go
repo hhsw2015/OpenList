@@ -194,6 +194,22 @@ func (d *OpenList) Remove(ctx context.Context, obj model.Obj) error {
 	return err
 }
 
+func (d *OpenList) GetDetails(ctx context.Context) (*model.StorageDetails, error) {
+	var resp common.Resp[DetailsResp]
+	_, _, err := d.request("/fs/get_details", http.MethodGet, func(req *resty.Request) {
+		req.SetResult(&resp)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &model.StorageDetails{
+		DiskUsage: model.DiskUsage{
+			TotalSpace: resp.Data.TotalSpace,
+			UsedSpace:  resp.Data.UsedSpace,
+		},
+	}, nil
+}
+
 func (d *OpenList) Put(ctx context.Context, dstDir model.Obj, s model.FileStreamer, up driver.UpdateProgress) error {
 	reader := driver.NewLimitedUploadStream(ctx, &driver.ReaderUpdatingProgress{
 		Reader:         s,

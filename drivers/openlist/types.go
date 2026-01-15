@@ -71,6 +71,12 @@ type LoginResp struct {
 	Token string `json:"token"`
 }
 
+type DetailsResp struct {
+	TotalSpace int64 `json:"total_space"`
+	UsedSpace  int64 `json:"used_space"`
+	FreeSpace  int64 `json:"free_space"`
+}
+
 type MeResp struct {
 	Id         int    `json:"id"`
 	Username   string `json:"username"`
