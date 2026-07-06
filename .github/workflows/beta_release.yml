@@ -43,10 +43,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          # GitHub release body max 125000 chars; truncate for --notes-file
+          head -c 124000 CHANGELOG.md > CHANGELOG.notes.md
+          if [ "$(wc -c < CHANGELOG.md)" -gt 124000 ]; then
+            printf '\n\n...changelog truncated. See full CHANGELOG.md asset.\n' >> CHANGELOG.notes.md
+          fi
           if ! gh release view beta; then
-            gh release create beta --prerelease --notes-file CHANGELOG.md
+            gh release create beta --prerelease --notes-file CHANGELOG.notes.md
           else
-            gh release edit beta --prerelease --notes-file CHANGELOG.md
+            gh release edit beta --prerelease --notes-file CHANGELOG.notes.md
           fi
           gh release upload beta "CHANGELOG.md" --clobber
 
