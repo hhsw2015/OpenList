@@ -647,8 +647,6 @@ github.com/stretchr/testify v1.8.4/go.mod h1:sz/lmYIOXD/1dqDmKjjqLyZ2RngseejIcXl
 github.com/stretchr/testify v1.10.0/go.mod h1:r2ic/lqez/lEtzL7wO/rwa5dbSLXVDPFyf8C91i36aY=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-github.com/t3rm1n4l/go-mega v0.0.0-20251120131202-6845944c051c h1:dtcOwRimeiBFrlutmF6K94l0rxYFARNFMA+lSQ41C+M=
-github.com/t3rm1n4l/go-mega v0.0.0-20251120131202-6845944c051c/go.mod h1:BF/l2jNyK+2h/BJZ7VLMAz6m/IWjA2F67gTjV1C/+Bo=
 github.com/t3rm1n4l/go-mega v0.0.0-20260630094356-4de2f127f34a h1:VQ9CmpYeTgdFvg748N6tIOHBZn+hXjJe2xNuOJHW07E=
 github.com/t3rm1n4l/go-mega v0.0.0-20260630094356-4de2f127f34a/go.mod h1:BF/l2jNyK+2h/BJZ7VLMAz6m/IWjA2F67gTjV1C/+Bo=
 github.com/taruti/bytepool v0.0.0-20160310082835-5e3a9ea56543 h1:6Y51mutOvRGRx6KqyMNo//xk8B8o6zW9/RVmy1VamOs=

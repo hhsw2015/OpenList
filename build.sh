@@ -4,8 +4,10 @@ builtAt="$(date +'%F %T %z')"
 gitAuthor="The OpenList Projects Contributors <noreply@openlist.team>"
 gitCommit=$(git log --pretty=format:"%h" -1)
 
-# Set frontend repository, default to OpenListTeam/OpenList-Frontend
-frontendRepo="${FRONTEND_REPO:-OpenListTeam/OpenList-Frontend}"
+# Set frontend repository. Default is this fork's own frontend so CI on
+# hhsw2015/OpenList picks up local drivers.json changes without needing
+# per-repo Actions variables. Override with FRONTEND_REPO env var.
+frontendRepo="${FRONTEND_REPO:-hhsw2015/OpenList-Frontend}"
 
 githubAuthArgs=""
 if [ -n "$GITHUB_TOKEN" ]; then
