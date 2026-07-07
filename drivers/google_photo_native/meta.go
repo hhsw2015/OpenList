@@ -32,7 +32,7 @@ type Addition struct {
 	ShowAlbums        bool `json:"show_albums"         default:"true"`
 	DisguiseNonMedia  bool `json:"disguise_non_media"  default:"true"`
 	PermanentDelete   bool `json:"permanent_delete"    default:"false"`
-	MaxListItems      int  `json:"max_list_items"      default:"5000"`
+	MaxListItems      int  `json:"max_list_items" type:"number" default:"5000"`
 }
 
 var config = driver.Config{
