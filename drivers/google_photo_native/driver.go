@@ -20,30 +20,18 @@ import (
 )
 
 // needsSizeProbe reports whether Link should HEAD the signed URL to
-// discover the file's true size. Only media types that OpenList's
-// server-side ProxyRange handler needs to seek into are worth the
-// extra round trip — currently video formats when web_proxy is on.
+// discover the file's true size. When the storage is behind
+// OpenList's server-side proxy (WebProxy or ProxyRange), the proxy
+// handler serves 0 bytes if the Link's ContentLength is 0, so we must
+// resolve the real size — for images just as much as for videos.
+// When the storage is not proxied, downloads go straight to Google's
+// CDN via 302 and no size hint is needed.
 func needsSizeProbe(lowerName string, storage *model.Storage) bool {
-	if storage == nil || (!storage.WebProxy && !storage.ProxyRange) {
+	_ = lowerName
+	if storage == nil {
 		return false
 	}
-	switch {
-	case strings.HasSuffix(lowerName, ".mov"),
-		strings.HasSuffix(lowerName, ".m4v"),
-		strings.HasSuffix(lowerName, ".mkv"),
-		strings.HasSuffix(lowerName, ".webm"),
-		strings.HasSuffix(lowerName, ".avi"),
-		strings.HasSuffix(lowerName, ".mpg"),
-		strings.HasSuffix(lowerName, ".mpeg"),
-		strings.HasSuffix(lowerName, ".3gp"),
-		strings.HasSuffix(lowerName, ".3g2"),
-		strings.HasSuffix(lowerName, ".wmv"),
-		strings.HasSuffix(lowerName, ".ts"),
-		strings.HasSuffix(lowerName, ".m2ts"),
-		strings.HasSuffix(lowerName, ".mts"):
-		return true
-	}
-	return false
+	return storage.WebProxy || storage.ProxyRange
 }
 
 type GooglePhotoNative struct {
