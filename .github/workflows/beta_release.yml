@@ -11,8 +11,14 @@ on:
         default: "mainstream"
         type: choice
         options:
-          - mainstream  # linux/darwin/windows amd64+arm64 only (~1 job, ~5 min)
+          - turbo       # single target, defaults to darwin-arm64 (~2-3 min)
+          - mainstream  # linux/darwin/windows amd64+arm64 (~5 min)
           - full        # all 8 matrix legs incl. musl/mips/loong/win7/android/freebsd (~30 min)
+      turbo_target:
+        description: "Turbo target (only used when scope=turbo). e.g. darwin-arm64, linux-amd64, windows-amd64"
+        required: false
+        default: "darwin-arm64"
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -131,19 +137,51 @@ jobs:
     name: Beta Release
     runs-on: ubuntu-latest
     steps:
-      # Skip the whole leg (checkout, build, upload) when this matrix leg
-      # is tagged "full" and the trigger didn't request full scope. This
-      # keeps push and default workflow_dispatch fast (~5 min single leg)
-      # while `gh workflow run "Beta Release builds" -f scope=full` still
-      # builds every platform (~30 min).
+      # Scope selection:
+      #   turbo      → only the mainstream leg runs, and its glob is
+      #                narrowed to a single platform (default darwin-arm64)
+      #                → 1 target, ~2-3 min. For dev iteration.
+      #   mainstream → the mainstream leg builds all its default targets
+      #                (linux/darwin/windows amd64+arm64+386+loong64) → ~5 min.
+      #   full       → every matrix leg runs, all 8 targets total → ~30 min.
+      # Push events and default dispatch = mainstream.
       - name: Decide whether to build this leg
         id: gate
         run: |
-          if [ "${{ matrix.scope }}" = "mainstream" ] || [ "${{ github.event.inputs.scope }}" = "full" ]; then
-            echo "run=true" >> "$GITHUB_OUTPUT"
+          SCOPE="${{ github.event.inputs.scope }}"
+          if [ -z "$SCOPE" ]; then SCOPE="mainstream"; fi
+
+          case "$SCOPE" in
+            full)
+              RUN=true
+              TARGET='${{ matrix.target }}'
+              ;;
+            turbo)
+              if [ "${{ matrix.scope }}" = "mainstream" ]; then
+                RUN=true
+                TARGET="${{ github.event.inputs.turbo_target }}"
+                [ -z "$TARGET" ] && TARGET="darwin-arm64"
+              else
+                RUN=false
+              fi
+              ;;
+            *)
+              # mainstream (default)
+              if [ "${{ matrix.scope }}" = "mainstream" ]; then
+                RUN=true
+                TARGET='${{ matrix.target }}'
+              else
+                RUN=false
+              fi
+              ;;
+          esac
+
+          echo "run=$RUN" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
+          if [ "$RUN" = "true" ]; then
+            echo "Building leg matrix.target=${{ matrix.target }} narrowed to '$TARGET' (scope=$SCOPE)"
           else
-            echo "run=false" >> "$GITHUB_OUTPUT"
-            echo "Skipping matrix.target=${{ matrix.target }} (scope=full, dispatch not requested)"
+            echo "Skipping leg matrix.target=${{ matrix.target }} (scope=$SCOPE)"
           fi
 
       - name: Checkout
@@ -169,7 +207,8 @@ jobs:
         if: steps.gate.outputs.run == 'true'
         uses: OpenListTeam/cgo-actions@v1.2.5
         with:
-          targets: ${{ matrix.target }}
+          # Gate rewrites this to a single platform when scope=turbo.
+          targets: ${{ steps.gate.outputs.target }}
           flags: ${{ matrix.flags || '-ldflags=' }}
           static-link-for-musl: true
           musl-target-format: $os-$musl-$arch
