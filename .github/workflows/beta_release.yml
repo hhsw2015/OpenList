@@ -4,6 +4,15 @@ on:
   push:
     branches: ["main"]
   workflow_dispatch:
+    inputs:
+      scope:
+        description: "Build scope"
+        required: true
+        default: "mainstream"
+        type: choice
+        options:
+          - mainstream  # linux/darwin/windows amd64+arm64 only (~1 job, ~5 min)
+          - full        # all 8 matrix legs incl. musl/mips/loong/win7/android/freebsd (~30 min)
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -69,66 +78,95 @@ jobs:
     strategy:
       matrix:
         include:
+          # ---- mainstream: always built (push + any workflow_dispatch) ----
           - target: "!(*musl*|*windows-arm64*|*windows7-*|*android*|*freebsd*)" # xgo and loongarch (exclude mips64le)
             hash: "md5"
             flags: ""
             goflags: ""
+            scope: "mainstream"
+          # ---- extended: only when workflow_dispatch scope=full ----
           - target: "linux-(mips|mips64|mipsle|mips64le|loong64)-musl*" # musl-compat-family
             hash: "md5-linux-musl-mips"
             flags: "-ldflags=-linkmode external -extldflags '-static -fpic'"
             goflags: ""
             musl_static: "true"
+            scope: "full"
           - target: "linux-!(arm*|mips|mips64|mipsle|mips64le|loong64)-musl*" # musl-not-arm (exclude compat-family)
             hash: "md5-linux-musl"
             flags: "-ldflags=-linkmode external -extldflags '-static -fpic'"
             goflags: ""
             musl_static: "true"
+            scope: "full"
           - target: "linux-arm*-musl*" #musl-arm
             hash: "md5-linux-musl-arm"
             flags: "-ldflags=-linkmode external -extldflags '-static -fpic'"
             goflags: ""
             musl_static: "true"
+            scope: "full"
           - target: "windows-arm64" #win-arm64
             hash: "md5-windows-arm64"
             flags: ""
             goflags: ""
             musl_static: "false"
+            scope: "full"
           - target: "windows7-*" #win7
             hash: "md5-windows7"
             flags: ""
             goflags: "-tags=sqlite_cgo_compat"
             musl_static: "false"
+            scope: "full"
           - target: "android-*" #android
             hash: "md5-android"
             flags: ""
             goflags: ""
             musl_static: "false"
+            scope: "full"
           - target: "freebsd-*" #freebsd
             hash: "md5-freebsd"
             flags: ""
             goflags: ""
             musl_static: "false"
+            scope: "full"
 
     name: Beta Release
     runs-on: ubuntu-latest
     steps:
+      # Skip the whole leg (checkout, build, upload) when this matrix leg
+      # is tagged "full" and the trigger didn't request full scope. This
+      # keeps push and default workflow_dispatch fast (~5 min single leg)
+      # while `gh workflow run "Beta Release builds" -f scope=full` still
+      # builds every platform (~30 min).
+      - name: Decide whether to build this leg
+        id: gate
+        run: |
+          if [ "${{ matrix.scope }}" = "mainstream" ] || [ "${{ github.event.inputs.scope }}" = "full" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping matrix.target=${{ matrix.target }} (scope=full, dispatch not requested)"
+          fi
+
       - name: Checkout
+        if: steps.gate.outputs.run == 'true'
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Setup Go
+        if: steps.gate.outputs.run == 'true'
         uses: actions/setup-go@v6
         with:
           go-version: "1.26.4"
 
       - name: Setup web
+        if: steps.gate.outputs.run == 'true'
         run: bash build.sh dev web
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FRONTEND_REPO: ${{ vars.FRONTEND_REPO }}
 
       - name: Build
+        if: steps.gate.outputs.run == 'true'
         uses: OpenListTeam/cgo-actions@v1.2.5
         with:
           targets: ${{ matrix.target }}
@@ -149,7 +187,7 @@ jobs:
           GOFLAGS: ${{ matrix.goflags }}
 
       - name: Verify musl binaries are static
-        if: matrix.musl_static == 'true'
+        if: steps.gate.outputs.run == 'true' && matrix.musl_static == 'true'
         run: |
           set -e
           shopt -s nullglob
@@ -167,12 +205,14 @@ jobs:
           done
 
       - name: Compress
+        if: steps.gate.outputs.run == 'true'
         run: |
           bash build.sh zip ${{ matrix.hash }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload assets to beta release
+        if: steps.gate.outputs.run == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -181,6 +221,7 @@ jobs:
           done
 
       - name: Clean illegal characters from matrix.target
+        if: steps.gate.outputs.run == 'true'
         id: clean_target_name
         run: |
           ILLEGAL_CHARS_REGEX='[":<>|*?\\/\r\n]'
@@ -190,6 +231,7 @@ jobs:
           echo "cleaned_target=$CLEANED_TARGET" >> $GITHUB_ENV
 
       - name: Upload assets to github artifact
+        if: steps.gate.outputs.run == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: beta builds for ${{ env.cleaned_target }}
