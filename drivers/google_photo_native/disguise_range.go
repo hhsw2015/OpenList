@@ -119,6 +119,50 @@ func (r *disguiseRangeReader) fetchHeadWithSize(ctx context.Context) (head []byt
 	return head, wireTotal, nil
 }
 
+// probeContentLength fetches the size of a signed Google URL without pulling
+// the body. Tries HEAD first; falls back to a tiny Range GET whose response
+// carries `Content-Range: bytes 0-N/TOTAL`. Used by Link to populate
+// ContentLength when the media item's List size is 0.
+func probeContentLength(ctx context.Context, url string, client *http.Client) (int64, error) {
+	// HEAD is cheapest but some Google backends 405 it. Try it first.
+	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	if resp, err := client.Do(req); err == nil {
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 && resp.ContentLength > 0 {
+			return resp.ContentLength, nil
+		}
+	}
+	// Fallback: 1-byte range GET; server must reply with Content-Range.
+	req, err = http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Range", "bytes=0-0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 || resp.StatusCode < 200 {
+		return 0, fmt.Errorf("probe status %d", resp.StatusCode)
+	}
+	if cr := resp.Header.Get("Content-Range"); cr != "" {
+		if slash := lastSlash(cr); slash >= 0 && slash+1 < len(cr) {
+			var n int64
+			if _, err := fmt.Sscanf(cr[slash+1:], "%d", &n); err == nil && n > 0 {
+				return n, nil
+			}
+		}
+	}
+	if resp.ContentLength > 0 {
+		return resp.ContentLength, nil
+	}
+	return 0, fmt.Errorf("no size hint in probe response")
+}
+
 func lastSlash(s string) int {
 	for i := len(s) - 1; i >= 0; i-- {
 		if s[i] == '/' {

@@ -255,14 +255,20 @@ func (d *GooglePhotoNative) Link(ctx context.Context, file model.Obj, args model
 	}
 
 	name := strings.ToLower(file.GetName())
-	// Fast path: files whose name is obviously not a candidate for
-	// disguise (not .mp4) return the signed URL directly. Downloads and
-	// image previews use this path. For video seeking, users should
-	// enable `proxy_range` on the storage — Google's video URL ignores
-	// Range headers, and OpenList's server-side ProxyRange handler
-	// emulates seeking locally without requiring driver-level proxying.
+
+	// Every Link must carry a valid ContentLength so OpenList's proxy /
+	// range handlers know the file size (List reports size=0 by design —
+	// see DESIGN.md §7.3). Probe the signed URL with a HEAD; use it to
+	// populate ContentLength and, for MP4 candidates, to detect disguise
+	// in the same round trip.
 	if !strings.HasSuffix(name, ".mp4") {
-		return &model.Link{URL: url}, nil
+		size, err := probeContentLength(ctx, url, d.api.client)
+		if err != nil {
+			// Non-fatal: return the URL without length. Downloads still
+			// work; seeking on a raw video won't (proxy handler needs size).
+			return &model.Link{URL: url}, nil
+		}
+		return &model.Link{URL: url, ContentLength: size}, nil
 	}
 
 	rr := newDisguiseRangeReader(url, file.GetSize(), d.api.client)
@@ -273,9 +279,9 @@ func (d *GooglePhotoNative) Link(ctx context.Context, file model.Obj, args model
 		return nil, fmt.Errorf("disguise probe failed: %w", err)
 	}
 	if !rr.IsDisguised() {
-		// Real MP4: no wrapper to strip. Return the signed URL so
-		// downloads are direct; enable proxy_range for seeking.
-		return &model.Link{URL: url}, nil
+		// Real MP4: no wrapper. Return the signed URL with the wire size
+		// so proxy_range can emulate seek.
+		return &model.Link{URL: url, ContentLength: rr.PayloadSize()}, nil
 	}
 	// Disguised: proxy via RangeReader so the client sees the payload only.
 	return &model.Link{
