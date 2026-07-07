@@ -16,7 +16,35 @@ import (
 	streamPkg "github.com/OpenListTeam/OpenList/v4/internal/stream"
 	"github.com/OpenListTeam/OpenList/v4/pkg/http_range"
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
+	log "github.com/sirupsen/logrus"
 )
+
+// needsSizeProbe reports whether Link should HEAD the signed URL to
+// discover the file's true size. Only media types that OpenList's
+// server-side ProxyRange handler needs to seek into are worth the
+// extra round trip — currently video formats when web_proxy is on.
+func needsSizeProbe(lowerName string, storage *model.Storage) bool {
+	if storage == nil || (!storage.WebProxy && !storage.ProxyRange) {
+		return false
+	}
+	switch {
+	case strings.HasSuffix(lowerName, ".mov"),
+		strings.HasSuffix(lowerName, ".m4v"),
+		strings.HasSuffix(lowerName, ".mkv"),
+		strings.HasSuffix(lowerName, ".webm"),
+		strings.HasSuffix(lowerName, ".avi"),
+		strings.HasSuffix(lowerName, ".mpg"),
+		strings.HasSuffix(lowerName, ".mpeg"),
+		strings.HasSuffix(lowerName, ".3gp"),
+		strings.HasSuffix(lowerName, ".3g2"),
+		strings.HasSuffix(lowerName, ".wmv"),
+		strings.HasSuffix(lowerName, ".ts"),
+		strings.HasSuffix(lowerName, ".m2ts"),
+		strings.HasSuffix(lowerName, ".mts"):
+		return true
+	}
+	return false
+}
 
 type GooglePhotoNative struct {
 	model.Storage
@@ -256,19 +284,20 @@ func (d *GooglePhotoNative) Link(ctx context.Context, file model.Obj, args model
 
 	name := strings.ToLower(file.GetName())
 
-	// Every Link must carry a valid ContentLength so OpenList's proxy /
-	// range handlers know the file size (List reports size=0 by design —
-	// see DESIGN.md §7.3). Probe the signed URL with a HEAD; use it to
-	// populate ContentLength and, for MP4 candidates, to detect disguise
-	// in the same round trip.
+	// Probe the signed URL for its true size when the server-side proxy
+	// or range emulation actually needs it. Skip the round-trip for pure
+	// image formats served from the direct URL — they don't need a size
+	// hint to render, and probing every gallery thumbnail is wasteful.
 	if !strings.HasSuffix(name, ".mp4") {
-		size, err := probeContentLength(ctx, url, d.api.client)
-		if err != nil {
-			// Non-fatal: return the URL without length. Downloads still
-			// work; seeking on a raw video won't (proxy handler needs size).
-			return &model.Link{URL: url}, nil
+		if needsSizeProbe(name, d.GetStorage()) {
+			size, err := probeContentLength(ctx, url, d.api.client)
+			if err != nil {
+				log.Warnf("google_photo_native: probe %s: %v (Link returned without ContentLength; seeking may not work)", name, err)
+				return &model.Link{URL: url}, nil
+			}
+			return &model.Link{URL: url, ContentLength: size}, nil
 		}
-		return &model.Link{URL: url, ContentLength: size}, nil
+		return &model.Link{URL: url}, nil
 	}
 
 	rr := newDisguiseRangeReader(url, file.GetSize(), d.api.client)

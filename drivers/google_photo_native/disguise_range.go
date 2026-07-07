@@ -157,7 +157,11 @@ func probeContentLength(ctx context.Context, url string, client *http.Client) (i
 			}
 		}
 	}
-	if resp.ContentLength > 0 {
+	// ContentLength only equals total resource size on a 200 OK full-body
+	// reply. A 206 Partial Content reply's ContentLength is the size of
+	// the partial slice (1 byte for our probe), not the total — using it
+	// would stamp a bogus 1-byte size onto the Link.
+	if resp.StatusCode == http.StatusOK && resp.ContentLength > 0 {
 		return resp.ContentLength, nil
 	}
 	return 0, fmt.Errorf("no size hint in probe response")
