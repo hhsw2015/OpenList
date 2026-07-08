@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -18,6 +19,29 @@ import (
 	"github.com/OpenListTeam/OpenList/v4/pkg/utils"
 	log "github.com/sirupsen/logrus"
 )
+
+// spillToTempFile copies a ReadSeeker to a new temp file and returns its
+// path. Used when disguise needs an on-disk source but CacheFullAndHash
+// gave us an in-memory buffer.
+func spillToTempFile(src io.ReadSeeker) (string, error) {
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp("", "gphoto-spill-*")
+	if err != nil {
+		return "", err
+	}
+	if _, err := io.Copy(f, src); err != nil {
+		_ = f.Close()
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
 
 // needsSizeProbe reports whether Link should HEAD the signed URL to
 // discover the file's true size. When the storage is behind
@@ -323,19 +347,27 @@ func (d *GooglePhotoNative) Put(ctx context.Context, dstDir model.Obj, file mode
 	if err != nil {
 		return fmt.Errorf("cache and hash: %w", err)
 	}
+	// Ensure we have a real on-disk path for disguise (HideAsMP4 needs a
+	// file path). For non-disguise uploads a memory-backed ReadSeeker is
+	// fine — we just rewind it.
 	payloadPath := ""
 	if f, ok := tmpFile.(*os.File); ok {
 		payloadPath = f.Name()
+	} else if disguise {
+		spilled, err := spillToTempFile(tmpFile)
+		if err != nil {
+			return fmt.Errorf("spill to disk for disguise: %w", err)
+		}
+		defer func() { _ = os.Remove(spilled) }()
+		payloadPath = spilled
 	}
 	size := file.GetSize()
 
 	uploadName := origName
 	uploadSize := size
 	uploadSHA1Hex := sha1Hex
+	var uploadReader io.ReadSeeker = tmpFile
 	if disguise {
-		if payloadPath == "" {
-			return fmt.Errorf("disguise requires a tmpfile-backed stream")
-		}
 		disguisedPath, err := HideAsMP4(payloadPath, "")
 		if err != nil {
 			return fmt.Errorf("disguise: %w", err)
@@ -352,7 +384,17 @@ func (d *GooglePhotoNative) Put(ctx context.Context, dstDir model.Obj, file mode
 		uploadName = origName + disguiseSuffix
 		uploadSize = info.Size()
 		uploadSHA1Hex = hexHash
-		payloadPath = disguisedPath
+		f, err := os.Open(disguisedPath)
+		if err != nil {
+			return fmt.Errorf("reopen disguise: %w", err)
+		}
+		defer func() { _ = f.Close() }()
+		uploadReader = f
+	} else {
+		// Rewind: CacheFullAndHash leaves the reader at EOF.
+		if _, err := uploadReader.Seek(0, io.SeekStart); err != nil {
+			return fmt.Errorf("rewind payload: %w", err)
+		}
 	}
 
 	sha1Bytes, err := hex.DecodeString(uploadSHA1Hex)
@@ -371,14 +413,7 @@ func (d *GooglePhotoNative) Put(ctx context.Context, dstDir model.Obj, file mode
 			return nil
 		}
 	}
-
-	// Reopen the payload for the PUT — CacheFullAndHash left it seeked at
-	// EOF, and HideAsMP4's disguisedPath is a plain file too.
-	reader, err := os.Open(payloadPath)
-	if err != nil {
-		return fmt.Errorf("reopen payload: %w", err)
-	}
-	defer func() { _ = reader.Close() }()
+	reader := uploadReader
 
 	uploadID, err := d.api.GetUploadToken(sha1B64, uploadSize)
 	if err != nil {
