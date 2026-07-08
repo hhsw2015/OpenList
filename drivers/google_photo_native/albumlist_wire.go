@@ -1,6 +1,64 @@
 package google_photo_native
 
-import "bytes"
+import (
+	"bytes"
+	"encoding/hex"
+	"os"
+
+	log "github.com/sirupsen/logrus"
+)
+
+// debugAlbumWire dumps the first few album envelopes to stderr so we can
+// derive the correct title field number from a real response. Enable by
+// setting env OLT_GPHOTO_DEBUG_ALBUMS=1 for one Init cycle.
+var debugAlbumWire = os.Getenv("OLT_GPHOTO_DEBUG_ALBUMS") == "1"
+
+func dumpAlbumEnvelope(key string, data []byte) {
+	log.Warnf("gphoto album envelope key=%s len=%d hex=%s", key, len(data), hex.EncodeToString(data))
+	dumpFields("  ", data, 0)
+}
+
+func dumpFields(indent string, data []byte, depth int) {
+	if depth > 6 {
+		return
+	}
+	off := 0
+	for off < len(data) {
+		fn, wt, no := readTag(data, off)
+		if no < 0 {
+			return
+		}
+		off = no
+		switch wt {
+		case 0:
+			v, n := readVarint(data, off)
+			log.Warnf("%sfield=%d varint=%d", indent, fn, v)
+			off = n
+		case 2:
+			length, n := readVarint(data, off)
+			if !lengthFits(length, n, len(data)) {
+				return
+			}
+			f := data[n : n+int(length)]
+			off = n + int(length)
+			if isPrintableString(f) && !looksLikeProtoEnvelope(f) {
+				log.Warnf("%sfield=%d str=%q", indent, fn, string(f))
+			} else if looksLikeProtoEnvelope(f) {
+				log.Warnf("%sfield=%d nested len=%d {", indent, fn, len(f))
+				dumpFields(indent+"  ", f, depth+1)
+				log.Warnf("%s}", indent)
+			} else {
+				log.Warnf("%sfield=%d bytes(%d)=%s", indent, fn, len(f), hex.EncodeToString(f))
+			}
+		case 5:
+			off += 4
+		case 1:
+			off += 8
+		default:
+			return
+		}
+	}
+}
 
 // Album-list request/response wire helpers. This is a verbatim port of the
 // captured request shape gotohp reverse-engineered. Every field number and
@@ -634,6 +692,17 @@ func parseAlbumResponseField1(data []byte) ([]AlbumItem, string) {
 				pageToken = string(fieldData)
 			}
 			if a := tryParseAlbumItem(fieldData); a != nil && a.AlbumKey != "" {
+				if debugAlbumWire && len(albums) < 3 {
+					dumpAlbumEnvelope(a.AlbumKey, fieldData)
+				}
+				// The list endpoint does not return album titles. Use the
+				// cover media's filename as the display name when Title
+				// is empty.
+				if a.Title == "" {
+					if cover := extractCoverFilename(fieldData); cover != "" {
+						a.Title = cover
+					}
+				}
 				albums = append(albums, *a)
 			}
 		case 5:
@@ -718,6 +787,75 @@ func extractInnerAlbumKey(data []byte) string {
 		} else if wireType == 5 {
 			offset += 4
 		} else if wireType == 1 {
+			offset += 8
+		} else {
+			return ""
+		}
+	}
+	return ""
+}
+
+// extractCoverFilename walks the album envelope's nested field 2 to find
+// the cover media's filename (field 4 in the media descriptor). The
+// public album-list endpoint does not return album titles, so the cover
+// filename is the most useful display string we can synthesize.
+func extractCoverFilename(envelope []byte) string {
+	// Envelope structure:
+	//   field=1: album key (top-level string)
+	//   field=2: {   // nested media descriptor
+	//     field=1..3: media metadata (uploader ids etc)
+	//     field=4: filename
+	//     ...
+	//   }
+	offset := 0
+	for offset < len(envelope) {
+		fn, wt, no := readTag(envelope, offset)
+		if no < 0 {
+			return ""
+		}
+		offset = no
+		if wt == 2 {
+			length, n2 := readVarint(envelope, offset)
+			if !lengthFits(length, n2, len(envelope)) {
+				return ""
+			}
+			body := envelope[n2 : n2+int(length)]
+			offset = n2 + int(length)
+			if fn == 2 {
+				// Descend and pull field 4 as the filename.
+				io := 0
+				for io < len(body) {
+					ifn, iwt, ino := readTag(body, io)
+					if ino < 0 {
+						break
+					}
+					io = ino
+					if iwt == 2 {
+						il, iln := readVarint(body, io)
+						if !lengthFits(il, iln, len(body)) {
+							break
+						}
+						f := body[iln : iln+int(il)]
+						io = iln + int(il)
+						if ifn == 4 && isPrintableString(f) && !looksLikeProtoEnvelope(f) {
+							return string(f)
+						}
+					} else if iwt == 0 {
+						_, io = readVarint(body, io)
+					} else if iwt == 5 {
+						io += 4
+					} else if iwt == 1 {
+						io += 8
+					} else {
+						break
+					}
+				}
+			}
+		} else if wt == 0 {
+			_, offset = readVarint(envelope, offset)
+		} else if wt == 5 {
+			offset += 4
+		} else if wt == 1 {
 			offset += 8
 		} else {
 			return ""
