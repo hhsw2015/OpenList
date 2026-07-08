@@ -647,6 +647,125 @@ func parseAlbumResponseField1(data []byte) ([]AlbumItem, string) {
 	return albums, pageToken
 }
 
+// isAlbumKeyLike matches Google Photos album keys — a leading "AF1Qip"
+// followed by URL-safe base64 chars. Anything else at field 1 is either
+// a nested envelope (which we descend into) or noise.
+func isAlbumKeyLike(data []byte) bool {
+	if len(data) < 10 || len(data) > 200 {
+		return false
+	}
+	if !bytes.HasPrefix(data, []byte("AF1Qip")) {
+		return false
+	}
+	for _, b := range data {
+		if b >= 'A' && b <= 'Z' {
+			continue
+		}
+		if b >= 'a' && b <= 'z' {
+			continue
+		}
+		if b >= '0' && b <= '9' {
+			continue
+		}
+		if b == '_' || b == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// looksLikeProtoEnvelope checks whether the buffer starts with a plausible
+// protobuf tag whose length-prefix would consume most of the buffer.
+func looksLikeProtoEnvelope(data []byte) bool {
+	if len(data) < 2 {
+		return false
+	}
+	// The wire byte encodes tag+wireType; tag == 1 (0x0A) or 2 (0x12) with
+	// wireType 2 (length-delimited) is what we see in album envelopes.
+	if data[0] != 0x0A && data[0] != 0x12 {
+		return false
+	}
+	length, off := readVarint(data, 1)
+	if off < 0 {
+		return false
+	}
+	return int(length) > 0 && off+int(length) <= len(data)
+}
+
+// extractInnerAlbumKey looks for a field-1 (or field-2) string inside a
+// nested envelope that matches Google's AF1Qip album key format.
+func extractInnerAlbumKey(data []byte) string {
+	offset := 0
+	for offset < len(data) {
+		fieldNum, wireType, newOffset := readTag(data, offset)
+		if newOffset < 0 {
+			return ""
+		}
+		offset = newOffset
+		if wireType == 2 {
+			length, no := readVarint(data, offset)
+			if !lengthFits(length, no, len(data)) {
+				return ""
+			}
+			f := data[no : no+int(length)]
+			offset = no + int(length)
+			if (fieldNum == 1 || fieldNum == 2) && isAlbumKeyLike(f) {
+				return string(f)
+			}
+		} else if wireType == 0 {
+			_, offset = readVarint(data, offset)
+		} else if wireType == 5 {
+			offset += 4
+		} else if wireType == 1 {
+			offset += 8
+		} else {
+			return ""
+		}
+	}
+	return ""
+}
+
+// extractInnerTitle looks for a printable string inside a nested title
+// envelope, preferring field 2 (the direct title slot) then falling back
+// to the first printable non-key field.
+func extractInnerTitle(data []byte) string {
+	offset := 0
+	var fallback string
+	for offset < len(data) {
+		fieldNum, wireType, newOffset := readTag(data, offset)
+		if newOffset < 0 {
+			break
+		}
+		offset = newOffset
+		if wireType == 2 {
+			length, no := readVarint(data, offset)
+			if !lengthFits(length, no, len(data)) {
+				break
+			}
+			f := data[no : no+int(length)]
+			offset = no + int(length)
+			if isPrintableString(f) && !isAlbumKeyLike(f) && !looksLikeProtoEnvelope(f) {
+				if fieldNum == 2 {
+					return string(f)
+				}
+				if fallback == "" {
+					fallback = string(f)
+				}
+			}
+		} else if wireType == 0 {
+			_, offset = readVarint(data, offset)
+		} else if wireType == 5 {
+			offset += 4
+		} else if wireType == 1 {
+			offset += 8
+		} else {
+			break
+		}
+	}
+	return fallback
+}
+
 func tryParseAlbumItem(data []byte) *AlbumItem {
 	album := &AlbumItem{}
 	hasData := false
@@ -672,13 +791,31 @@ func tryParseAlbumItem(data []byte) *AlbumItem {
 			}
 			fieldData := data[newOffset : newOffset+int(length)]
 			offset = newOffset + int(length)
-			if fieldNum == 1 && isPrintableString(fieldData) {
-				album.AlbumKey = string(fieldData)
-				hasData = true
+			if fieldNum == 1 {
+				// The album envelope wraps the actual AlbumKey in an inner
+				// field-1. Try to descend before falling back to raw bytes,
+				// so we don't stamp `\n<len>AF1Qip...` as the key.
+				if inner := extractInnerAlbumKey(fieldData); inner != "" {
+					album.AlbumKey = inner
+					hasData = true
+				} else if isAlbumKeyLike(fieldData) {
+					album.AlbumKey = string(fieldData)
+					hasData = true
+				}
 			}
 			if fieldNum == 2 && isPrintableString(fieldData) {
-				album.Title = string(fieldData)
-				hasData = true
+				// Guard against the same envelope-vs-string confusion for
+				// titles: raw wire tag bytes are also "printable" per
+				// isPrintableString's rules.
+				if looksLikeProtoEnvelope(fieldData) {
+					if t := extractInnerTitle(fieldData); t != "" {
+						album.Title = t
+						hasData = true
+					}
+				} else {
+					album.Title = string(fieldData)
+					hasData = true
+				}
 			}
 		case 5:
 			offset += 4

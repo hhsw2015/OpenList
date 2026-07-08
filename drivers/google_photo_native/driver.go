@@ -456,6 +456,13 @@ func (d *GooglePhotoNative) Remove(ctx context.Context, obj model.Obj) error {
 
 // MakeDir under albums/ creates a new album with the given name.
 // Anywhere else, unsupported.
+//
+// Google's native CreateAlbum endpoint rejects albums with zero media
+// items (400 "invalid argument"), so we can't produce a truly empty album
+// via this API. Wire clients get around this by creating the album at the
+// same time as the first media upload (see CreateAlbum(name, mediaKeys)).
+// Until we thread through a "hold this MakeDir until the first upload"
+// workflow, MakeDir returns NotSupport to prevent confusing 400s.
 func (d *GooglePhotoNative) MakeDir(ctx context.Context, parentDir model.Obj, dirName string) error {
 	if d.api == nil {
 		return fmt.Errorf("driver not initialized")
@@ -463,8 +470,7 @@ func (d *GooglePhotoNative) MakeDir(ctx context.Context, parentDir model.Obj, di
 	if parentDir.GetID() != albumsID {
 		return errs.NotSupport
 	}
-	_, err := d.api.CreateAlbum(dirName, nil)
-	return err
+	return fmt.Errorf("Google Photos does not support empty album creation; upload the first item into a temporary path, then Move/Copy it here to create %q", dirName)
 }
 
 // Move from any media obj into an album adds it to that album. Google

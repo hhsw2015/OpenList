@@ -26,6 +26,12 @@ type Config struct {
 	OnlyIndices bool `json:"only_indices"`
 	// prefer proxy download even if direct link is available
 	PreferProxy bool `json:"prefer_proxy"`
+	// ProxyOnRange: when true, the /d download handler only routes to the
+	// server-side proxy when the request carries a Range header. Non-Range
+	// requests (whole-file download) still 302 to the direct URL. This lets
+	// a driver support video seek (proxy_range) without paying the proxy
+	// tax on plain downloads. Opt-in per driver (see google_photo_native).
+	ProxyOnRange bool `json:"-"`
 }
 type LinkCacheMode int8
 

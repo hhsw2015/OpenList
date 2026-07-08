@@ -25,6 +25,29 @@ func Down(c *gin.Context) {
 		common.ErrorPage(c, err, 500)
 		return
 	}
+	// ProxyOnRange (driver opt-in): non-Range requests bypass the proxy
+	// and 302 to the direct link. Video seek (Range) still proxies so
+	// proxy_range / RangeReader can honor the offset. Other storages
+	// are unaffected — the flag is off for them.
+	if storage.Config().ProxyOnRange && c.Request.Header.Get("Range") == "" &&
+		!storage.Config().MustProxy() {
+		link, _, err := fs.Link(c.Request.Context(), rawPath, model.LinkArgs{
+			IP:       c.ClientIP(),
+			Header:   c.Request.Header,
+			Type:     c.Query("type"),
+			Redirect: true,
+		})
+		if err != nil {
+			common.ErrorPage(c, err, 500)
+			return
+		}
+		if link.URL != "" {
+			redirect(c, link)
+			return
+		}
+		// Driver returned a RangeReader (e.g. disguise) — falls through
+		// to the proxy path below.
+	}
 	if common.ShouldProxy(storage, filename) {
 		Proxy(c)
 		return

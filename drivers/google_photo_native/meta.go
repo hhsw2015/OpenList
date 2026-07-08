@@ -36,10 +36,11 @@ type Addition struct {
 }
 
 var config = driver.Config{
-	Name:        "GooglePhotoNative",
-	DefaultRoot: rootPath,
-	LocalSort:   true,
-	Alert:       "warning|Uses a reverse-engineered Google Photos API. May stop working without notice. The MP4 disguise feature ships arbitrary bytes as fake video; do not rely on it for critical data.",
+	Name:         "GooglePhotoNative",
+	DefaultRoot:  rootPath,
+	LocalSort:    true,
+	ProxyOnRange: true, // 302 for full downloads, proxy only for Range seeks
+	Alert:        "warning|Uses a reverse-engineered Google Photos API. May stop working without notice. The MP4 disguise feature ships arbitrary bytes as fake video; do not rely on it for critical data.",
 }
 
 func init() {
