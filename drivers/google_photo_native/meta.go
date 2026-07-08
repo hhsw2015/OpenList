@@ -29,7 +29,13 @@ type Addition struct {
 
 	// Namespace / behaviour
 	RequestTrashItems bool `json:"request_trash_items" default:"false"`
-	ShowAlbums        bool `json:"show_albums"         default:"true"`
+	// Off by default. The native album-list endpoint returns media items,
+	// not albums, so the /albums view lists cover media rather than real
+	// albums. Reference clients don't enumerate user-created albums either
+	// — CreateAlbum works, but there is no reliable list endpoint. Leave
+	// this off unless you accept the /albums view is essentially another
+	// flat media list.
+	ShowAlbums bool `json:"show_albums" default:"false"`
 	DisguiseNonMedia  bool `json:"disguise_non_media"  default:"true"`
 	PermanentDelete   bool `json:"permanent_delete"    default:"false"`
 	MaxListItems      int  `json:"max_list_items" type:"number" default:"5000"`

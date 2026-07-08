@@ -695,14 +695,6 @@ func parseAlbumResponseField1(data []byte) ([]AlbumItem, string) {
 				if debugAlbumWire && len(albums) < 3 {
 					dumpAlbumEnvelope(a.AlbumKey, fieldData)
 				}
-				// The list endpoint does not return album titles. Use the
-				// cover media's filename as the display name when Title
-				// is empty.
-				if a.Title == "" {
-					if cover := extractCoverFilename(fieldData); cover != "" {
-						a.Title = cover
-					}
-				}
 				albums = append(albums, *a)
 			}
 		case 5:
